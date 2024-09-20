@@ -3,6 +3,7 @@ package com.ruoyi.project.system.user.service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+import javax.validation.ConstraintViolationException;
 import javax.validation.Validator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,14 +13,19 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 import com.ruoyi.common.constant.UserConstants;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.common.utils.DateUtils;
+import com.ruoyi.common.utils.ExceptionUtil;
+import com.ruoyi.common.utils.Md5Utils;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.common.utils.bean.BeanValidators;
+import com.ruoyi.common.utils.html.EscapeUtil;
 import com.ruoyi.common.utils.security.ShiroUtils;
 import com.ruoyi.common.utils.spring.SpringUtils;
 import com.ruoyi.common.utils.text.Convert;
 import com.ruoyi.framework.aspectj.lang.annotation.DataScope;
 import com.ruoyi.framework.shiro.service.PasswordService;
 import com.ruoyi.project.system.config.service.IConfigService;
+import com.ruoyi.project.system.dept.service.IDeptService;
 import com.ruoyi.project.system.post.domain.Post;
 import com.ruoyi.project.system.post.mapper.PostMapper;
 import com.ruoyi.project.system.role.domain.Role;
@@ -61,6 +67,9 @@ public class UserServiceImpl implements IUserService
 
     @Autowired
     private PasswordService passwordService;
+
+    @Autowired
+    private IDeptService deptService;
 
     @Autowired
     protected Validator validator;
@@ -217,6 +226,7 @@ public class UserServiceImpl implements IUserService
     {
         user.randomSalt();
         user.setPassword(passwordService.encryptPassword(user.getLoginName(), user.getPassword(), user.getSalt()));
+        user.setPwdUpdateDate(DateUtils.getNowDate());
         user.setCreateBy(ShiroUtils.getLoginName());
         // 新增用户信息
         int rows = userMapper.insertUser(user);
@@ -498,7 +508,6 @@ public class UserServiceImpl implements IUserService
         StringBuilder successMsg = new StringBuilder();
         StringBuilder failureMsg = new StringBuilder();
         String operName = ShiroUtils.getLoginName();
-        String password = configService.selectConfigByKey("sys.user.initPassword");
         for (User user : userList)
         {
             try
@@ -508,7 +517,9 @@ public class UserServiceImpl implements IUserService
                 if (StringUtils.isNull(u))
                 {
                     BeanValidators.validateWithException(validator, user);
-                    user.setPassword(password);
+                    deptService.checkDeptDataScope(user.getDeptId());
+                    String password = configService.selectConfigByKey("sys.user.initPassword");
+                    user.setPassword(Md5Utils.hash(user.getLoginName() + password));
                     user.setCreateBy(operName);
                     userMapper.insertUser(user);
                     successNum++;
@@ -519,6 +530,7 @@ public class UserServiceImpl implements IUserService
                     BeanValidators.validateWithException(validator, user);
                     checkUserAllowed(u);
                     checkUserDataScope(u.getUserId());
+                    deptService.checkDeptDataScope(user.getDeptId());
                     user.setUserId(u.getUserId());
                     user.setUpdateBy(operName);
                     userMapper.updateUser(user);
@@ -534,7 +546,12 @@ public class UserServiceImpl implements IUserService
             catch (Exception e)
             {
                 failureNum++;
-                String msg = "<br/>" + failureNum + "、账号 " + user.getLoginName() + " 导入失败：";
+                String loginName = user.getLoginName();
+                if (ExceptionUtil.isCausedBy(e, ConstraintViolationException.class))
+                {
+                    loginName = EscapeUtil.clean(loginName);
+                }
+                String msg = "<br/>" + failureNum + "、账号 " + loginName + " 导入失败：";
                 failureMsg.append(msg + e.getMessage());
                 log.error(msg, e);
             }
